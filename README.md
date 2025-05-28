@@ -3,7 +3,7 @@
   </a>
   <a href="lamid.ufs.br"><img  align="right" src="https://github.com/user-attachments/assets/915d65fb-281c-42db-b81b-05c785c2473e" alt="LAMID" height="34" /></a> <br/>
 
-# template-lamid
+# PLN e Cloze
 > Responsável 1 <a href="https://orcid.org/" target="blank"><img align="top" src="https://upload.wikimedia.org/wikipedia/commons/thumb/0/06/ORCID_iD.svg/2048px-ORCID_iD.svg.png" alt="tuliosg" height="16" width="16" /></a> ;  Responsável 2 <a href="https://orcid.org/" target="blank"><img align="top" src="https://upload.wikimedia.org/wikipedia/commons/thumb/0/06/ORCID_iD.svg/2048px-ORCID_iD.svg.png" alt="tuliosg" height="16" width="16" /></a>
 
 Repositório template para projetos do LAMID.
