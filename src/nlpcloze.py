@@ -1,0 +1,467 @@
+"""
+Sistema de Avaliação Automática de Testes Cloze
+"""
+import ast
+import json
+import os
+import pickle
+from pathlib import Path
+from typing import List, Tuple, Dict, Union, Optional
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import spacy
+import torch
+import torch.nn.functional as F
+from nltk.metrics import edit_distance
+from transformers import AutoTokenizer, AutoModel
+
+
+class AvaliadorCloze:
+    """
+    Classe para avaliação automática de testes de compreensão de leitura tipo Cloze.
+    """
+    
+    def __init__(self, 
+                 model_name: str = "PORTULAN/albertina-100m-portuguese-ptbr-encoder",
+                 spacy_model: str = "pt_core_news_lg",
+                 cache_dir: str = "./cache",
+                 peso_classe: float = 0.4,
+                 peso_similaridade: float = 0.6
+                 ):
+        """
+        Inicializa o avaliador com configurações.
+        
+        Args:
+            model_name: Nome do modelo BERT para embeddings
+            spacy_model: Modelo spaCy para análise linguística
+            cache_dir: Diretório para cache de embeddings
+            peso_classe: Peso para classe gramatical correta
+            peso_similaridade: Peso para similaridade semântica
+        """
+        self.model_name = model_name
+        self.spacy_model = spacy_model
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(exist_ok=True)
+        
+        self.peso_classe = peso_classe
+        self.peso_similaridade = peso_similaridade
+        
+        # Cache de embeddings
+        self.cache_embeddings = {}
+        self.cache_file = self.cache_dir / "embeddings_cache.pkl"
+        
+    
+    def _load_models(self):
+        """Carrega os modelos necessários."""
+        print("Carregando modelos...")
+        
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            self.model = AutoModel.from_pretrained(self.model_name)
+            self.model.eval()
+            print(f"✓ Modelo BERT carregado: {self.model_name}")
+        except Exception as e:
+            raise RuntimeError(f"Erro ao carregar modelo BERT: {e}")
+        
+        try:
+            self.nlp = spacy.load(self.spacy_model)
+            print(f"✓ Modelo spaCy carregado: {self.spacy_model}")
+        except OSError:
+            raise RuntimeError(f"Modelo spaCy '{self.spacy_model}' não encontrado. "
+                             f"Instale com: python -m spacy download {self.spacy_model}")
+    
+    def _load_cache(self):
+        """Carrega cache de embeddings do disco."""
+        if self.cache_file.exists():
+            try:
+                with open(self.cache_file, 'rb') as f:
+                    self.cache_embeddings = pickle.load(f)
+                print(f"✓ Cache carregado: {len(self.cache_embeddings)} embeddings")
+            except Exception as e:
+                print(f"Aviso: Erro ao carregar cache - {e}")
+                self.cache_embeddings = {}
+    
+    def _save_cache(self):
+        """Salva cache de embeddings no disco."""
+        try:
+            with open(self.cache_file, 'wb') as f:
+                pickle.dump(self.cache_embeddings, f)
+        except Exception as e:
+            print(f"Aviso: Erro ao salvar cache - {e}")
+    
+    def get_embedding(self, palavra: str) -> torch.Tensor:
+        """
+        Obtém embedding de uma palavra, usando cache quando possível.
+        
+        Args:
+            palavra: Palavra para embedding
+            
+        Returns:
+            Tensor normalizado do embedding
+        """
+        if not hasattr(self, 'tokenizer') or not hasattr(self, 'model'):
+            self._load_models()
+            self._load_cache()
+
+        palavra = palavra.strip().lower()
+        
+        # Verifica cache
+        if palavra in self.cache_embeddings:
+            return self.cache_embeddings[palavra]
+        
+        # Calcula embedding
+        try:
+            encoded_input = self.tokenizer([palavra],
+                                         return_tensors='pt', 
+                                         padding=True, 
+                                         truncation=True)
+            
+            with torch.no_grad():
+                model_output = self.model(**encoded_input)
+            
+            embedding = model_output.last_hidden_state[:, 0, :].squeeze(0)
+            embedding = F.normalize(embedding, p=2, dim=0)
+            
+            # Armazena no cache
+            self.cache_embeddings[palavra] = embedding.clone().detach()
+            
+            return embedding
+            
+        except Exception as e:
+            print(f"Erro ao gerar embedding para '{palavra}': {e}")
+            # Retorna embedding zero em caso de erro
+            return torch.zeros(self.model.config.hidden_size)
+    
+    def similaridade(self, palavra1: str, palavra2: str) -> float:
+        """
+        Calcula similaridade semântica entre duas palavras.
+        
+        Args:
+            palavra1: Primeira palavra
+            palavra2: Segunda palavra
+            
+        Returns:
+            Similaridade cosseno entre as palavras
+        """
+        emb1 = self.get_embedding(palavra1)
+        emb2 = self.get_embedding(palavra2)
+        
+        cos_sim = torch.dot(emb1, emb2).item()
+        return cos_sim
+    
+    def pos_tag(self, palavra: str) -> Optional[str]:
+        """
+        Obtém classe gramatical de uma palavra.
+        
+        Args:
+            palavra: Palavra de interesse
+            
+        Returns:
+            Classe gramatical (POS tag) ou None se erro
+        """
+        if not hasattr(self, 'nlp'):
+            self._load_models()
+        try:
+            doc = self.nlp(palavra.strip())
+            if len(doc) > 0:
+                return doc[0].pos_
+            return None
+        except Exception as e:
+            print(f"Erro ao processar POS tag para '{palavra}': {e}")
+            return None
+    
+    def avaliacao_lacuna(self, gabarito: str, resposta: str) -> Tuple[float, str]:
+        """
+        Avalia uma lacuna individual do teste.
+        
+        Args:
+            gabarito: Resposta correta esperada
+            resposta: Resposta do aluno
+            
+        Returns:
+            Tupla com (pontuação, tipo_resposta)
+        """
+        # Normaliza entradas
+        gabarito = str(gabarito).strip().lower()
+        resposta = str(resposta).strip().lower()
+        
+        # Resposta exata
+        if resposta == gabarito:
+            return 1.0, 'correta'
+        
+        # Resposta em branco
+        if resposta in ["-", "", " ", "none", "nan"]:
+            return 0.0, 'branco'
+        
+        # Erro de grafia 
+        max_dist = max(1, len(resposta) // 2)
+        if edit_distance(resposta, gabarito) <= max_dist:
+            return 1.0, 'grafia_incorreta'
+        
+        pos_resposta = self.pos_tag(resposta)
+        pos_gabarito = self.pos_tag(gabarito)
+        
+        # Classe gramatical correta
+        if pos_resposta and pos_gabarito and pos_resposta == pos_gabarito:
+            pontuacao = self.peso_classe
+            sim = self.similaridade(resposta, gabarito)
+            
+            # Alta similaridade semântica
+            if sim >= 0.75:
+                pontuacao += sim * self.peso_similaridade
+                return pontuacao, 'aceitavel'
+            else:
+                return pontuacao, 'classe_correta'
+        
+        return 0.0, 'erro'
+    
+    def compreensao_leitura(self, gabarito: List[str], 
+                          respostas: Union[List[str], str]) -> Tuple[float, float, Dict]:
+        """
+        Avalia todas as lacunas do teste.
+        
+        Args:
+            gabarito: Lista de respostas corretas
+            respostas: Lista de respostas do aluno ou string
+            
+        Returns:
+            Tupla com (compreensão, coeficiente de variação, avaliação detalhada)
+        """
+        # Processa respostas se vier como string
+        if isinstance(respostas, str):
+            try:
+                respostas = ast.literal_eval(respostas)
+            except:
+                respostas = [respostas]
+        
+        # Inicializa estrutura de avaliação
+        avaliacao = {
+            'pontuacao': [],
+            'correta': 0,
+            'grafia_incorreta': 0,
+            'aceitavel': 0,
+            'classe_correta': 0,
+            'erro': 0,
+            'branco': 0
+        }
+        
+        # Avalia cada lacuna
+        n_lacunas = len(gabarito)
+        for i in range(n_lacunas):
+            pontuacao, tipo = self.avaliacao_lacuna(gabarito[i], respostas[i])
+            avaliacao['pontuacao'].append(pontuacao)
+            avaliacao[tipo] += 1
+        
+        # Calcula métricas
+        if avaliacao['pontuacao']:
+            media = np.mean(avaliacao['pontuacao'])
+            cv = np.std(avaliacao['pontuacao']) / media if media > 0 else 0
+        else:
+            media = cv = 0
+        
+        compreensao = round(media * 100, 3)
+        coef_variacao = round(cv, 3)
+        
+        return compreensao, coef_variacao, avaliacao
+    
+    def intervalo_tempo(self, tempo_inicial: str, tempo_final: str) -> float:
+        """
+        Calcula duração do teste em minutos.
+        
+        Args:
+            tempo_inicial: Horário de início
+            tempo_final: Horário de término
+            
+        Returns:
+            Duração em minutos
+        """
+        try:
+            tempo_inicial = pd.to_datetime(tempo_inicial)
+            tempo_final = pd.to_datetime(tempo_final)
+            duracao = tempo_final - tempo_inicial
+            return duracao.total_seconds() // 60
+        except Exception as e:
+            print(f"Erro ao calcular duração: {e}")
+            return 0.0
+    
+    def processar_dataframe(self, df: pd.DataFrame, gabarito: List[str]) -> pd.DataFrame:
+        """
+        Processa dataframe completo com avaliações.
+        
+        Args:
+            df: DataFrame com dados originais
+            gabarito: Lista de respostas corretas
+            
+        Returns:
+            DataFrame expandido com avaliações
+        """
+        df_resultado = df.copy()
+        
+        # Calcula duração
+        if 'tempo_inicial' in df.columns and 'tempo_final' in df.columns:
+            df_resultado['duracao'] = df_resultado.apply(
+                lambda row: self.intervalo_tempo(row['tempo_inicial'], row['tempo_final']), 
+                axis=1
+            )
+        
+        # Inicializa colunas de resultado
+        resultados = {
+            'compreensao': [],
+            'coeficiente_variacao': [],
+            'percentual_corretas': [],
+            'correta': [],
+            'grafia_incorreta': [],
+            'aceitavel': [],
+            'classe_correta': [],
+            'erro': [],
+            'branco': []
+        }
+        
+        # Processa cada linha
+        for _, row in df_resultado.iterrows():     
+            compreensao, coef_var, avaliacao = self.compreensao_leitura(gabarito, row['respostas'])
+            
+            resultados['compreensao'].append(compreensao)
+            resultados['coeficiente_variacao'].append(coef_var)
+            resultados['percentual_corretas'].append(
+                round(avaliacao['correta'] / len(gabarito) * 100, 3)
+            )
+            
+            for tipo in ['correta', 'grafia_incorreta', 'aceitavel', 
+                        'classe_correta', 'erro', 'branco']:
+                resultados[tipo].append(avaliacao[tipo])
+        
+        # Adiciona colunas ao DataFrame
+        for coluna, valores in resultados.items():
+            df_resultado[coluna] = valores
+        
+        return df_resultado
+    
+    def get_gabarito(self, titulo: str, arquivo_textos: str) -> List[str]:
+        """
+        Carrega gabarito de teste específico.
+        
+        Args:
+            titulo: Título do texto
+            arquivo_textos: Caminho para arquivo JSON com os dados dos textos
+            
+        Returns:
+            Lista de respostas corretas
+        """
+        try:
+            with open(arquivo_textos, 'r', encoding='utf-8') as file:
+                dados_textos = json.load(file)
+            
+            df_textos = pd.DataFrame(dados_textos)
+            gabarito = df_textos[df_textos['titulo'] == titulo]['respostas'].values
+            
+            if len(gabarito) > 0:
+                return gabarito[0]
+            else:
+                raise ValueError(f"Texto '{titulo}' não encontrado no arquivo")
+                
+        except Exception as e:
+            raise RuntimeError(f"Erro ao carregar gabarito: {e}")
+    
+    def plot_dist_respostas(self, df: pd.DataFrame, tipo: str = 'compreensao', 
+                           salvar: bool = True, output_dir: str = "./plots"):
+        """
+        Plota distribuição de desempenho dos alunos.
+        
+        Args:
+            df: DataFrame com dados de desempenho
+            tipo: Tipo de métrica ('compreensao' ou 'percentual_corretas')
+            salvar: Se deve salvar o gráfico
+            output_dir: Diretório para salvar gráficos
+        """
+        plt.figure(figsize=(7, 5))
+        sns.histplot(df[tipo], bins=20, kde=True)
+        plt.xlim(0, 100)
+        
+        # Labels e título
+        if tipo == 'compreensao':
+            titulo = f"Distribuição da Compreensão de Leitura"
+            xlabel = 'Taxa de Compreensão (%)'
+        else:
+            titulo = f"Distribuição da Taxa de Acerto"
+            xlabel = 'Taxa de Acerto (%)'
+        
+        # Adiciona informações da turma
+        if 'ano' in df.columns and 'turma' in df.columns:
+            titulo += f" - {df['ano'].iloc[0]}º {df['turma'].iloc[0]}"
+        
+        plt.title(titulo)
+        plt.xlabel(xlabel)
+        plt.ylabel('Frequência')
+        
+        if salvar:
+            os.makedirs(output_dir, exist_ok=True)
+            sufixo = f"{df['ano'].iloc[0]}-{df['turma'].iloc[0]}" if 'ano' in df.columns else "resultado"
+            plt.savefig(f"{output_dir}/[{tipo}]_distribuicao_{sufixo}.png", dpi=300, bbox_inches='tight')
+        
+        plt.show()
+    
+    def plot_eficiencia_leitura(self, df: pd.DataFrame, tipo: str = 'compreensao',
+                               salvar: bool = True, output_dir: str = "./plots"):
+        """
+        Plota eficiência de leitura (desempenho vs tempo).
+        Baseado em Cardoso et al. (2024) - https://osf.io/47m93/.
+        
+        Args:
+            df: DataFrame com dados de desempenho
+            tipo: Tipo de métrica ('compreensao' ou 'percentual_corretas')
+            salvar: Se deve salvar o gráfico
+            output_dir: Diretório para salvar gráficos
+        """
+        plt.figure(figsize=(6, 6))
+        
+        # Scatter plot
+        sns.scatterplot(x=tipo, y='duracao', data=df, color='black', s=30)
+        
+        # Linhas de referência
+        media_desempenho = np.mean(df[tipo])
+        media_duracao = np.mean(df['duracao'])
+        
+        plt.axvline(x=media_desempenho, color='blue', linestyle='--', linewidth=2)
+        plt.axvline(x=44, color='red', linewidth=2)
+        plt.axvline(x=58, color='green', linewidth=2)
+        plt.axhline(y=media_duracao, color='blue', linestyle='--', linewidth=2)
+        
+        # Labels e título
+        titulo_base = "Eficiência de Leitura: "
+        if tipo == 'compreensao':
+            titulo_base += "Compreensão vs Tempo"
+            xlabel = "Compreensão (%)"
+        else:
+            titulo_base += "Taxa de Acerto vs Tempo"
+            xlabel = "Taxa de Acerto (%)"
+        
+        # Adiciona informações da turma se disponível
+        if 'ano' in df.columns and 'turma' in df.columns:
+            titulo_base += f"\n{df['ano'].iloc[0]}º {df['turma'].iloc[0]}"
+        
+        plt.title(titulo_base, fontsize=14)
+        plt.xlabel(xlabel, fontsize=12)
+        plt.ylabel("Tempo (min)", fontsize=12)
+        plt.xlim(0, 100)
+        plt.ylim(0, 60)
+        
+        
+        #plt.legend()
+        plt.tight_layout()
+        
+        if salvar:
+            os.makedirs(output_dir, exist_ok=True)
+            sufixo = f"{df['ano'].iloc[0]}-{df['turma'].iloc[0]}" if 'ano' in df.columns else "resultado"
+            plt.savefig(f"{output_dir}/[{tipo}]_eficiencia_leitura_{sufixo}.png", 
+                       dpi=300, bbox_inches='tight')
+        
+        plt.show()
+    
+    def __del__(self):
+        """Salva cache ao destruir objeto."""
+        if hasattr(self, 'cache_embeddings'):
+            self._save_cache()

@@ -12,7 +12,7 @@
 | `tempo_final`         | Horário de conclusão do teste (formato HH:MM).                                      | Hora          |
 | `duracao`             | Tempo total gasto para completar o teste (em minutos).                              | Decimal       |
 | `compreensao`         | Percentual de compreensão do texto, calculado com base nas pontuações das lacunas.  | Decimal       |
-| `coeficiente_variacao`| Medida de dispersão das respostas (quanto variaram em relação à média).             | Decimal       |
+| `coeficiente_variacao`| Coeficiente de variação da compreensão.             | Decimal       |
 | `percentual_corretas` | Percentual de respostas exatas em relação ao total de lacunas.                      | Decimal       |
 | `correta`             | Quantidade de respostas exatas fornecidas pelo discente.                            | Inteiro       |
 | `grafia_incorreta`    | Quantidade de respostas esperadas porém com erros ortográficos.     | Inteiro       |
