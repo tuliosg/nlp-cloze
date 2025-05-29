@@ -380,7 +380,6 @@ class AvaliadorCloze:
         plt.figure(figsize=(7, 5))
         sns.histplot(df[tipo], bins=20, kde=True)
         plt.xlim(0, 100)
-        plt.ylim(0, df[tipo].value_counts().max() * 1.1)
         
         # Labels e título
         if tipo == 'compreensao':
@@ -401,7 +400,7 @@ class AvaliadorCloze:
         if salvar:
             os.makedirs(output_dir, exist_ok=True)
             sufixo = f"{df['ano'].iloc[0]}-{df['turma'].iloc[0]}" if 'ano' in df.columns else "resultado"
-            plt.savefig(f"{output_dir}/distribuicao_{tipo}_{sufixo}.png", dpi=300, bbox_inches='tight')
+            plt.savefig(f"{output_dir}/[{tipo}]_distribuicao_{sufixo}.png", dpi=300, bbox_inches='tight')
         
         plt.show()
     
@@ -417,7 +416,7 @@ class AvaliadorCloze:
             salvar: Se deve salvar o gráfico
             output_dir: Diretório para salvar gráficos
         """
-        plt.figure(figsize=(4, 6))
+        plt.figure(figsize=(6, 6))
         
         # Scatter plot
         sns.scatterplot(x=tipo, y='duracao', data=df, color='black', s=30)
@@ -429,7 +428,7 @@ class AvaliadorCloze:
         plt.axvline(x=media_desempenho, color='blue', linestyle='--', linewidth=2)
         plt.axvline(x=44, color='red', linewidth=2)
         plt.axvline(x=58, color='green', linewidth=2)
-        plt.axhline(y=media_duracao, color='blue', linestyle=':', linewidth=2)
+        plt.axhline(y=media_duracao, color='blue', linestyle='--', linewidth=2)
         
         # Labels e título
         titulo_base = "Eficiência de Leitura: "
@@ -450,8 +449,6 @@ class AvaliadorCloze:
         plt.xlim(0, 100)
         plt.ylim(0, 60)
         
-        if 'duracao' in df.columns and not df['duracao'].isna().all():
-            plt.ylim(1, max(60, df['duracao'].max() * 1.1))
         
         #plt.legend()
         plt.tight_layout()
@@ -459,7 +456,7 @@ class AvaliadorCloze:
         if salvar:
             os.makedirs(output_dir, exist_ok=True)
             sufixo = f"{df['ano'].iloc[0]}-{df['turma'].iloc[0]}" if 'ano' in df.columns else "resultado"
-            plt.savefig(f"{output_dir}/eficiencia_leitura_{tipo}_{sufixo}.png", 
+            plt.savefig(f"{output_dir}/[{tipo}]_eficiencia_leitura_{sufixo}.png", 
                        dpi=300, bbox_inches='tight')
         
         plt.show()
