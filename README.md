@@ -14,6 +14,8 @@ Jupyter Notebook contendo a implementação.
 ### 📁 data
 Conjuntos de dados utilizados na análise. Na pasta **raw** está o arquivo com os dados brutos e na **processed** estão os arquivos resultantes do processamento.
 
+> O conjunto de dados apresentado neste trabalho é oriundo da tabulação dos resultados da aplicação de Testes Cloze que ocorreu no Colégio de Aplicação da Universidade Federal de Sergipe (CODAP - UFS) no dia 29/02/2024. Os textos originais dos testes foram: "Consumismo entre os jovens", "Inseguranças no uso das redes sociais", "A importância da responsabilidade ambiental" e "O uso dos celulares por crianças". Os TCs foram aplicados do 6º ao 9º ano.
+
 ### 📁 docs 
 Resultados das análises: visualizações e relatórios.
 
