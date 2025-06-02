@@ -5,6 +5,7 @@ import ast
 import json
 import os
 import pickle
+from itertools import groupby
 from pathlib import Path
 from typing import List, Tuple, Dict, Union, Optional
 
@@ -27,9 +28,7 @@ class AvaliadorCloze:
     def __init__(self, 
                  model_name: str = "PORTULAN/albertina-100m-portuguese-ptbr-encoder",
                  spacy_model: str = "pt_core_news_lg",
-                 cache_dir: str = "./cache",
-                 peso_classe: float = 0.4,
-                 peso_similaridade: float = 0.6
+                 cache_dir: str = "./cache"
                  ):
         """
         Inicializa o avaliador com configurações.
@@ -38,16 +37,12 @@ class AvaliadorCloze:
             model_name: Nome do modelo BERT para embeddings
             spacy_model: Modelo spaCy para análise linguística
             cache_dir: Diretório para cache de embeddings
-            peso_classe: Peso para classe gramatical correta
-            peso_similaridade: Peso para similaridade semântica
         """
         self.model_name = model_name
         self.spacy_model = spacy_model
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(exist_ok=True)
         
-        self.peso_classe = peso_classe
-        self.peso_similaridade = peso_similaridade
         
         # Cache de embeddings
         self.cache_embeddings = {}
@@ -190,7 +185,7 @@ class AvaliadorCloze:
         
         # Resposta exata
         if resposta == gabarito:
-            return 1.0, 'correta'
+            return 1.0, 'exata'
         
         # Resposta em branco
         if resposta in ["-", "", " ", "none", "nan"]:
@@ -206,15 +201,13 @@ class AvaliadorCloze:
         
         # Classe gramatical correta
         if pos_resposta and pos_gabarito and pos_resposta == pos_gabarito:
-            pontuacao = self.peso_classe
             sim = self.similaridade(resposta, gabarito)
             
             # Alta similaridade semântica
             if sim >= 0.75:
-                pontuacao += sim * self.peso_similaridade
-                return pontuacao, 'aceitavel'
+                return 1.0, 'aceitavel'
             else:
-                return pontuacao, 'classe_correta'
+                return 0.5, 'classe_correta'
         
         return 0.0, 'erro'
     
@@ -240,12 +233,13 @@ class AvaliadorCloze:
         # Inicializa estrutura de avaliação
         avaliacao = {
             'pontuacao': [],
-            'correta': 0,
+            'exata': 0,
             'grafia_incorreta': 0,
             'aceitavel': 0,
             'classe_correta': 0,
             'erro': 0,
-            'branco': 0
+            'branco': 0,
+            'correcao': []
         }
         
         # Avalia cada lacuna
@@ -254,6 +248,7 @@ class AvaliadorCloze:
             pontuacao, tipo = self.avaliacao_lacuna(gabarito[i], respostas[i])
             avaliacao['pontuacao'].append(pontuacao)
             avaliacao[tipo] += 1
+            avaliacao['correcao'].append(tipo)
         
         # Calcula métricas
         if avaliacao['pontuacao']:
@@ -266,6 +261,30 @@ class AvaliadorCloze:
         coef_variacao = round(cv, 3)
         
         return compreensao, coef_variacao, avaliacao
+    
+    def analisa_quadrantes(self, tipos_resposta: List[str]) -> List[Tuple[Optional[str], int]]:
+        """
+        Analisa respostas em quadrantes para identificar categorias dominantes.
+        Args:
+            tipos_resposta: Lista de tipos de resposta ('exata', 'grafia_incorreta', etc.)
+    
+        Returns:
+            list: Lista com (categoria_dominante, repeticoes) para cada quarto
+        """
+        quadrantes = np.array_split(tipos_resposta, 4)
+        
+        resultados = []
+        
+        for quadrante in quadrantes:
+            if len(quadrante) == 0:
+                resultados.append((None, 0))
+            else:
+                sequencias = [(tipo, len(list(grupo))) for tipo, grupo in groupby(quadrante)]
+                categoria_max, max_rep = max(sequencias, key=lambda x: x[1])
+                resultados.append((categoria_max, max_rep))
+        
+        return resultados
+
     
     def intervalo_tempo(self, tempo_inicial: str, tempo_final: str) -> float:
         """
@@ -289,14 +308,14 @@ class AvaliadorCloze:
     
     def processar_dataframe(self, df: pd.DataFrame, gabarito: List[str]) -> pd.DataFrame:
         """
-        Processa dataframe completo com avaliações.
+        Processa dataframe completo com avaliações incluindo análise de quadrantes.
         
         Args:
             df: DataFrame com dados originais
             gabarito: Lista de respostas corretas
             
         Returns:
-            DataFrame expandido com avaliações
+            DataFrame expandido com avaliações e análise de quadrantes
         """
         df_resultado = df.copy()
         
@@ -309,10 +328,15 @@ class AvaliadorCloze:
         
         # Inicializa colunas de resultado
         resultados = {
+            'correcao': [],
+            'quadrante_1': [],
+            'quadrante_2': [],
+            'quadrante_3': [],
+            'quadrante_4': [],
             'compreensao': [],
             'coeficiente_variacao': [],
-            'percentual_corretas': [],
-            'correta': [],
+            'taxa_exatas': [],
+            'exata': [],
             'grafia_incorreta': [],
             'aceitavel': [],
             'classe_correta': [],
@@ -324,20 +348,34 @@ class AvaliadorCloze:
         for _, row in df_resultado.iterrows():     
             compreensao, coef_var, avaliacao = self.compreensao_leitura(gabarito, row['respostas'])
             
+            # Análise de quadrantes da correção
+            analise_quadrantes = self.analisa_quadrantes(avaliacao['correcao'])
+            
+            # Adiciona resultados básicos
+            resultados['correcao'].append(avaliacao['correcao'])
             resultados['compreensao'].append(compreensao)
             resultados['coeficiente_variacao'].append(coef_var)
-            resultados['percentual_corretas'].append(
-                round(avaliacao['correta'] / len(gabarito) * 100, 3)
+            resultados['taxa_exatas'].append(
+                round(avaliacao['exata'] / len(gabarito) * 100, 3)
             )
             
-            for tipo in ['correta', 'grafia_incorreta', 'aceitavel', 
+            # Adiciona contagens por tipo
+            for tipo in ['exata', 'grafia_incorreta', 'aceitavel', 
                         'classe_correta', 'erro', 'branco']:
                 resultados[tipo].append(avaliacao[tipo])
+            
+            # Adiciona análise de quadrantes
+            for i, (categoria, repeticoes) in enumerate(analise_quadrantes, 1):
+                quadrante_key = f'quadrante_{i}'
+                # Formato: (categoria, repetições) ou (None, 0) se vazio
+                resultados[quadrante_key].append((str(categoria), repeticoes))
         
         # Adiciona colunas ao DataFrame
         for coluna, valores in resultados.items():
             df_resultado[coluna] = valores
         
+        
+
         return df_resultado
     
     def get_gabarito(self, titulo: str, arquivo_textos: str) -> List[str]:
@@ -373,7 +411,7 @@ class AvaliadorCloze:
         
         Args:
             df: DataFrame com dados de desempenho
-            tipo: Tipo de métrica ('compreensao' ou 'percentual_corretas')
+            tipo: Tipo de métrica ('compreensao' ou 'taxa_exatas')
             salvar: Se deve salvar o gráfico
             output_dir: Diretório para salvar gráficos
         """
@@ -412,7 +450,7 @@ class AvaliadorCloze:
         
         Args:
             df: DataFrame com dados de desempenho
-            tipo: Tipo de métrica ('compreensao' ou 'percentual_corretas')
+            tipo: Tipo de métrica ('compreensao' ou 'taxa_exatas')
             salvar: Se deve salvar o gráfico
             output_dir: Diretório para salvar gráficos
         """
