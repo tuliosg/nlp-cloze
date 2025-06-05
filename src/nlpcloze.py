@@ -1,6 +1,3 @@
-"""
-Sistema de Avaliação Automática de Testes Cloze
-"""
 import ast
 import json
 import os
@@ -20,9 +17,9 @@ from nltk.metrics import edit_distance
 from transformers import AutoTokenizer, AutoModel
 
 
-class AvaliadorCloze:
+class NLPCloze:
     """
-    Classe para avaliação automática de testes de compreensão de leitura tipo Cloze.
+    Classe para avaliação automática de testes Cloze.
     """
     
     def __init__(self, 
@@ -31,7 +28,7 @@ class AvaliadorCloze:
                  cache_dir: str = "./cache"
                  ):
         """
-        Inicializa o avaliador com configurações.
+        Inicialização da classe.
         
         Args:
             model_name: Nome do modelo BERT para embeddings
@@ -69,7 +66,7 @@ class AvaliadorCloze:
                              f"Instale com: python -m spacy download {self.spacy_model}")
     
     def _load_cache(self):
-        """Carrega cache de embeddings do disco."""
+        """Carrega cache de embeddings"""
         if self.cache_file.exists():
             try:
                 with open(self.cache_file, 'rb') as f:
@@ -80,7 +77,7 @@ class AvaliadorCloze:
                 self.cache_embeddings = {}
     
     def _save_cache(self):
-        """Salva cache de embeddings no disco."""
+        """Salva cache de embeddings"""
         try:
             with open(self.cache_file, 'wb') as f:
                 pickle.dump(self.cache_embeddings, f)
@@ -89,7 +86,7 @@ class AvaliadorCloze:
     
     def get_embedding(self, palavra: str) -> torch.Tensor:
         """
-        Obtém embedding de uma palavra, usando cache quando possível.
+        Obtém embedding de uma palavra.
         
         Args:
             palavra: Palavra para embedding
@@ -149,7 +146,7 @@ class AvaliadorCloze:
     
     def pos_tag(self, palavra: str) -> Optional[str]:
         """
-        Obtém classe gramatical de uma palavra.
+        Obtém classe gramatical de uma palavra usando o spaCy.
         
         Args:
             palavra: Palavra de interesse
@@ -173,13 +170,12 @@ class AvaliadorCloze:
         Avalia uma lacuna individual do teste.
         
         Args:
-            gabarito: Resposta correta esperada
+            gabarito: Resposta esperada
             resposta: Resposta do aluno
             
         Returns:
             Tupla com (pontuação, tipo_resposta)
         """
-        # Normaliza entradas
         gabarito = str(gabarito).strip().lower()
         resposta = str(resposta).strip().lower()
         
@@ -308,14 +304,14 @@ class AvaliadorCloze:
     
     def processar_dataframe(self, df: pd.DataFrame, gabarito: List[str]) -> pd.DataFrame:
         """
-        Processa dataframe completo com avaliações incluindo análise de quadrantes.
+        Processa dataframe completo com avaliações.
         
         Args:
             df: DataFrame com dados originais
             gabarito: Lista de respostas corretas
             
         Returns:
-            DataFrame expandido com avaliações e análise de quadrantes
+            DataFrame expandido com avaliações
         """
         df_resultado = df.copy()
         
@@ -374,8 +370,6 @@ class AvaliadorCloze:
         for coluna, valores in resultados.items():
             df_resultado[coluna] = valores
         
-        
-
         return df_resultado
     
     def get_gabarito(self, titulo: str, arquivo_textos: str) -> List[str]:
@@ -487,8 +481,6 @@ class AvaliadorCloze:
         plt.xlim(0, 100)
         plt.ylim(0, 60)
         
-        
-        #plt.legend()
         plt.tight_layout()
         
         if salvar:
