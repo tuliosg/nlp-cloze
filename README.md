@@ -4,20 +4,18 @@
   <a href="lamid.ufs.br"><img  align="right" src="https://github.com/user-attachments/assets/915d65fb-281c-42db-b81b-05c785c2473e" alt="LAMID" height="34" /></a> <br/>
 
 # Avaliação de eficiência na leitura: uma abordagem baseada em PLN
-> Túlio S. de Gois <a href="https://orcid.org/" target="blank"><img align="top" src="https://upload.wikimedia.org/wikipedia/commons/thumb/0/06/ORCID_iD.svg/2048px-ORCID_iD.svg.png" alt="tuliosg" height="16" width="16" /></a> ;  Nayla S. S. das Chagas <a href="https://orcid.org/" target="blank"><img align="top" src="https://upload.wikimedia.org/wikipedia/commons/thumb/0/06/ORCID_iD.svg/2048px-ORCID_iD.svg.png" alt="tuliosg" height="16" width="16" /></a>
+> Túlio S. de Gois <a href="https://orcid.org/0009-0000-5270-8033" target="blank"><img align="top" src="https://upload.wikimedia.org/wikipedia/commons/thumb/0/06/ORCID_iD.svg/2048px-ORCID_iD.svg.png" height="16" width="16" /></a> ;  Nayla S. S. das Chagas <a href="https://orcid.org/0009-0004-8268-5484" target="blank"><img align="top" src="https://upload.wikimedia.org/wikipedia/commons/thumb/0/06/ORCID_iD.svg/2048px-ORCID_iD.svg.png" height="16" width="16" /></a>; Raquel M. Ko. Freitag <a href="https://orcid.org/0000-0002-4972-4320" target="blank"><img align="top" src="https://upload.wikimedia.org/wikipedia/commons/thumb/0/06/ORCID_iD.svg/2048px-ORCID_iD.svg.png" height="16" width="16" /></a>
 
 ## Estrutura do repositório
 
 ### 📁 src
-Jupyter Notebook contendo a implementação.
+Os códigos desenvolvidos neste trabalho.
 
 ### 📁 data
-Conjuntos de dados utilizados na análise. Na pasta **raw** está o arquivo com os dados brutos e na **processed** estão os arquivos resultantes do processamento.
-
-> O conjunto de dados apresentado neste trabalho é oriundo da tabulação dos resultados da aplicação de Testes Cloze que ocorreu no Colégio de Aplicação da Universidade Federal de Sergipe (CODAP - UFS) no dia 29/02/2024. Os textos originais dos testes foram: "Consumismo entre os jovens", "Inseguranças no uso das redes sociais", "A importância da responsabilidade ambiental" e "O uso dos celulares por crianças". Os TCs foram aplicados do 6º ao 9º ano.
+Conjuntos de dados utilizados para avaliação.
 
 ### 📁 docs 
-Resultados das análises: visualizações e relatórios.
+Materiais suplementares relacionados ao artigo e às análises: fluxograma da avaliação de lacunas e plotagens.
 
 ### 📄 `requirements.txt`
 Dependências para executar os códigos da pasta `src`.
