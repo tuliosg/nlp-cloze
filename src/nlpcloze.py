@@ -54,15 +54,15 @@ class NLPCloze:
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
             self.model = AutoModel.from_pretrained(self.model_name)
             self.model.eval()
-            print(f"✓ Modelo BERT carregado: {self.model_name}")
+            print(f"✓ {self.model_name}")
         except Exception as e:
-            raise RuntimeError(f"Erro ao carregar modelo BERT: {e}")
+            raise RuntimeError(f"Erro ao carregar modelo: {e}")
         
         try:
             self.nlp = spacy.load(self.spacy_model)
-            print(f"✓ Modelo spaCy carregado: {self.spacy_model}")
+            print(f"✓ {self.spacy_model}")
         except OSError:
-            raise RuntimeError(f"Modelo spaCy '{self.spacy_model}' não encontrado. "
+            raise RuntimeError(f"Modelo '{self.spacy_model}' não encontrado. "
                              f"Instale com: python -m spacy download {self.spacy_model}")
     
     def _load_cache(self):
@@ -71,7 +71,6 @@ class NLPCloze:
             try:
                 with open(self.cache_file, 'rb') as f:
                     self.cache_embeddings = pickle.load(f)
-                print(f"✓ Cache carregado: {len(self.cache_embeddings)} embeddings")
             except Exception as e:
                 print(f"Aviso: Erro ao carregar cache - {e}")
                 self.cache_embeddings = {}
