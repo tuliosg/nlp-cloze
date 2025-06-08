@@ -41,7 +41,6 @@ class NLPCloze:
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(exist_ok=True)
 
-        # Cache de embeddings
         self.cache_embeddings = {}
         self.cache_file = self.cache_dir / "embeddings_cache.pkl"
 
@@ -99,11 +98,9 @@ class NLPCloze:
 
         palavra = palavra.strip().lower()
 
-        # Verifica cache
         if palavra in self.cache_embeddings:
             return self.cache_embeddings[palavra]
 
-        # Calcula embedding
         try:
             encoded_input = self.tokenizer([palavra],
                                            return_tensors='pt',
@@ -116,14 +113,13 @@ class NLPCloze:
             embedding = model_output.last_hidden_state[:, 0, :].squeeze(0)
             embedding = F.normalize(embedding, p=2, dim=0)
 
-            # Armazena no cache
             self.cache_embeddings[palavra] = embedding.clone().detach()
 
             return embedding
 
         except Exception as e:
             print(f"Erro ao gerar embedding para '{palavra}': {e}")
-            # Retorna embedding zero em caso de erro
+
             return torch.zeros(self.model.config.hidden_size)
 
     def similaridade(self, palavra1: str, palavra2: str) -> float:
@@ -233,7 +229,6 @@ class NLPCloze:
         Returns:
             Tupla com (compreensão, coeficiente de variação, avaliação detalhada).
         """
-        # Processa respostas se vier como string
         if isinstance(respostas, str):
             try:
                 respostas = ast.literal_eval(respostas)
@@ -244,21 +239,18 @@ class NLPCloze:
         correcao_tipos = []
         n_lacunas = len(gabarito)
 
-        # Avalia cada lacuna
         for i in range(n_lacunas):
             resposta_aluno = respostas[i] if i < len(respostas) else ""
             pontuacao, tipo = self.avaliar_lacuna(gabarito[i], resposta_aluno)
             pontuacoes.append(pontuacao)
             correcao_tipos.append(tipo)
 
-        # Calcula métricas
         media = np.mean(pontuacoes) if pontuacoes else 0
         cv = np.std(pontuacoes) / media if media > 0 else 0
 
         compreensao = round(media * 100, 3)
         coef_variacao = round(cv, 3)
 
-        # Monta o dicionário de avaliação
         contagens = self.analisar_correcao(correcao_tipos)
         avaliacao = {
             'pontuacao': pontuacoes,
@@ -289,7 +281,7 @@ class NLPCloze:
                 continue
 
             if modo_analise == 'moda':
-                if not quadrante.any(): # Verifica se o quadrante não está vazio
+                if not quadrante.any(): 
                     resultados.append((None, 0))
                 else:
                     contagem_quadrante = Counter(quadrante)
@@ -338,25 +330,21 @@ class NLPCloze:
         """
         df_resultado = df.copy()
 
-        # Calcula duração
         if 'tempo_inicial' in df.columns and 'tempo_final' in df.columns:
             df_resultado['duracao'] = df_resultado.apply(
                 lambda row: self.intervalo_tempo(row['tempo_inicial'], row['tempo_final']),
                 axis=1
             )
 
-        # Inicializa colunas de resultado
         resultados = {
             'correcao': [], 'quadrante_1': [], 'quadrante_2': [], 'quadrante_3': [], 'quadrante_4': [],
             'compreensao': [], 'coeficiente_variacao': [], 'taxa_exatas': [], 'exata': [],
             'grafia_incorreta': [], 'aceitavel': [], 'classe_correta': [], 'erro': [], 'branco': []
         }
 
-        # Processa cada linha
         for _, row in df_resultado.iterrows():
             compreensao, coef_var, avaliacao = self.avaliar_respostas_cloze(gabarito, row['respostas'])
 
-            # Adiciona resultados básicos
             resultados['correcao'].append(avaliacao['correcao'])
             resultados['compreensao'].append(compreensao)
             resultados['coeficiente_variacao'].append(coef_var)
@@ -364,17 +352,14 @@ class NLPCloze:
                 round(avaliacao['exata'] / len(gabarito) * 100, 3) if gabarito else 0
             )
 
-            # Adiciona contagens por tipo
             for tipo in ['exata', 'grafia_incorreta', 'aceitavel', 'classe_correta', 'erro', 'branco']:
                 resultados[tipo].append(avaliacao[tipo])
 
-            # Análise de quadrantes (usando o novo modo padrão 'moda')
             analise_quadrantes = self.analisar_quadrantes(avaliacao['correcao'], modo_analise='moda')
             for i, (categoria, contagem) in enumerate(analise_quadrantes, 1):
                 quadrante_key = f'quadrante_{i}'
                 resultados[quadrante_key].append((str(categoria), contagem))
 
-        # Adiciona colunas ao DataFrame
         for coluna, valores in resultados.items():
             df_resultado[coluna] = valores
 
@@ -421,7 +406,6 @@ class NLPCloze:
         sns.histplot(df[tipo], bins=20, kde=True)
         plt.xlim(0, 100)
 
-        # Labels e título
         if tipo == 'compreensao':
             titulo = f"Distribuição da Compreensão de Leitura"
             xlabel = 'Taxa de Compreensão (%)'
@@ -429,7 +413,6 @@ class NLPCloze:
             titulo = f"Distribuição da Taxa de Acerto"
             xlabel = 'Taxa de Acerto (%)'
 
-        # Adiciona informações da turma
         if 'ano' in df.columns and 'turma' in df.columns:
             titulo += f" - {df['ano'].iloc[0]}º {df['turma'].iloc[0]}"
 
@@ -447,7 +430,7 @@ class NLPCloze:
     def plot_eficiencia_leitura(self, df: pd.DataFrame, tipo: str = 'compreensao',
                                 salvar: bool = True, output_dir: str = "./plots"):
         """
-        Plota eficiência de leitura (desempenho vs tempo).
+        Plot da eficiência de leitura (desempenho vs tempo).
         Baseado em Cardoso et al. (2024) - https://osf.io/47m93/.
 
         Args:
@@ -458,10 +441,8 @@ class NLPCloze:
         """
         plt.figure(figsize=(6, 6))
 
-        # Scatter plot
         sns.scatterplot(x=tipo, y='duracao', data=df, color='black', s=30)
 
-        # Linhas de referência
         media_desempenho = np.mean(df[tipo])
         media_duracao = np.mean(df['duracao'])
 
@@ -470,7 +451,6 @@ class NLPCloze:
         plt.axvline(x=58, color='green', linewidth=2)
         plt.axhline(y=media_duracao, color='blue', linestyle='--', linewidth=2)
 
-        # Labels e título
         titulo_base = "Eficiência de Leitura: "
         if tipo == 'compreensao':
             titulo_base += "Compreensão vs Tempo"
@@ -479,7 +459,6 @@ class NLPCloze:
             titulo_base += "Taxa de Acerto vs Tempo"
             xlabel = "Taxa de Acerto (%)"
 
-        # Adiciona informações da turma se disponível
         if 'ano' in df.columns and 'turma' in df.columns:
             titulo_base += f"\n{df['ano'].iloc[0]}º {df['turma'].iloc[0]}"
 
