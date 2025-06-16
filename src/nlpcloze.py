@@ -50,11 +50,11 @@ class NLPCloze:
         """Carrega os modelos Transformer e spaCy se ainda não foram carregados."""
         if self.model is None:
             try:
-                print(f"Carregando modelo Transformer: {self.model_name}...")
+                print(f"Carregando modelo {self.model_name}...")
                 self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
                 self.model = AutoModel.from_pretrained(self.model_name).to(self.device).eval()
             except Exception as e:
-                raise RuntimeError(f"Erro ao carregar modelo Transformer: {e}")
+                raise RuntimeError(f"Erro ao carregar modelo {e}")
 
         if self.nlp is None:
             try:
@@ -67,7 +67,7 @@ class NLPCloze:
 
     def _load_cache(self) -> dict:
         """
-        Carrega o cache de embeddings do disco usando torch.load.
+        Carrega o cache de embeddings usando torch.load.
 
         Returns:
             dict: O dicionário de cache carregado ou um dicionário vazio se não for encontrado.
@@ -131,7 +131,7 @@ class NLPCloze:
 
     def _get_pos_tag_contextual(self, contexto: str, palavra: str) -> Optional[str]:
         """
-        Obtém a classe gramatical contextual da palavra, agrupando AUX em VERB.
+        Obtém a classe gramatical contextual da palavra.
 
         Args:
             contexto (str): A frase completa com o marcador '[LACUNA]'.
@@ -150,7 +150,7 @@ class NLPCloze:
             for token in doc:
                 if token.idx == start_char:
                     pos_tag = token.pos_
-                    return 'VERB' if pos_tag == 'AUX' else pos_tag
+                    return pos_tag
             return None
         except Exception:
             return None
@@ -165,7 +165,7 @@ class NLPCloze:
             p2 (str): A segunda palavra.
 
         Returns:
-            float: O score de similaridade de cosseno entre -1.0 e 1.0.
+            float: O score de similaridade de cosseno.
         """
         emb1 = self._get_contextual_embedding(contexto, p1)
         emb2 = self._get_contextual_embedding(contexto, p2)
@@ -183,6 +183,7 @@ class NLPCloze:
         Returns:
             Tuple[float, str]: Uma tupla contendo a pontuação (de 0.0 a 1.0) e o tipo da resposta.
         """
+        self._load_models() 
         gabarito_norm = str(gabarito).strip().lower()
         resposta_norm = str(resposta).strip().lower()
 
@@ -192,7 +193,7 @@ class NLPCloze:
             return 0.0, 'branco'
 
         max_dist = max(1, len(resposta_norm) // 3)
-        if edit_distance(resposta_norm, gabarito_norm) <= max_dist:
+        if edit_distance(resposta_norm, gabarito_norm, transpositions=True) <= max_dist:
             return 1.0, 'grafia_incorreta'
         
         pos_resposta = self._get_pos_tag_contextual(contexto, resposta_norm)
@@ -206,7 +207,7 @@ class NLPCloze:
             else:
                 return 0.5, 'classe_correta'
         
-        return 0.0, 'erro'
+        return 0.0, 'incorreta'
 
     def _get_text_data(self, titulo: str, arquivo_textos: str) -> Tuple[list, list]:
         """
@@ -285,7 +286,7 @@ class NLPCloze:
         media = np.mean(pontuacoes) if pontuacoes else 0
         compreensao = round(media * 100, 3)
         
-        tipos_possiveis = ['exata', 'grafia_incorreta', 'aceitavel', 'classe_correta', 'erro', 'branco']
+        tipos_possiveis = ['exata', 'grafia_incorreta', 'aceitavel', 'classe_correta', 'incorreta', 'branco']
         contagens = {tipo: 0 for tipo in tipos_possiveis}
         contagens.update(Counter(correcao_tipos))
 
@@ -321,5 +322,5 @@ class NLPCloze:
         return df_resultado 
 
     def __del__(self):
-        """Salva o cache em disco ao destruir o objeto ou ao final da sessão."""
+        """Salva o cache ao destruir o objeto ou ao final da sessão."""
         self._save_cache()
