@@ -150,7 +150,7 @@ class NLPCloze:
             for token in doc:
                 if token.idx == start_char:
                     pos_tag = token.pos_
-                    return pos_tag
+                    return pos_tag if pos_tag != 'AUX' else 'VERB'
             return None
         except Exception:
             return None
