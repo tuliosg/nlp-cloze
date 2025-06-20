@@ -15,7 +15,7 @@ Os códigos desenvolvidos neste trabalho.
 Conjuntos de dados utilizados para avaliação.
 
 ### 📁 docs 
-Materiais suplementares relacionados ao artigo e às análises: fluxograma da avaliação de lacunas e plotagens.
+Materiais suplementares relacionados ao artigo e às análises.
 
 ### 📄 `requirements.txt`
 Dependências para executar os códigos da pasta `src`.

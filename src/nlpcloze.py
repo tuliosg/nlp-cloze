@@ -1,17 +1,13 @@
 import ast
 import json
-import os
-import pickle
 from collections import Counter
-from itertools import groupby
 from pathlib import Path
 from typing import List, Tuple, Dict, Union, Optional
 
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
 import spacy
+from spacy.cli.download import download as spacy_download
 import torch
 import torch.nn.functional as F
 from nltk.metrics import edit_distance
@@ -20,486 +16,311 @@ from transformers import AutoTokenizer, AutoModel
 
 class NLPCloze:
     """
-    Classe para avaliação automática de testes Cloze.
+    Classe para avaliação automática e contextual de testes Cloze.
     """
-
     def __init__(self,
-                 model_name: str = "PORTULAN/albertina-100m-portuguese-ptbr-encoder",
+                 model_name: str = "neuralmind/bert-base-portuguese-cased",
                  spacy_model: str = "pt_core_news_lg",
-                 cache_dir: str = "./cache"
-                 ):
+                 limiar_aceitacao: float = 0.652,
+                 cache_path: str = "../src/cache/embeddings_cache.pt"):
         """
-        Inicialização da classe.
+        Inicializa a classe com o modelo e limiar otimizados.
 
         Args:
-            model_name: Nome do modelo BERT para embeddings
-            spacy_model: Modelo spaCy para análise linguística
-            cache_dir: Diretório para cache de embeddings
+            model_name (str): Nome do modelo Transformer a ser usado do Hugging Face.
+            spacy_model (str): Nome do modelo spaCy para análise linguística.
+            limiar_aceitacao (float): Limiar de similaridade para considerar uma resposta 'aceitável'.
+            cache_path (str): Caminho para o arquivo de cache de embeddings.
         """
         self.model_name = model_name
-        self.spacy_model = spacy_model
-        self.cache_dir = Path(cache_dir)
-        self.cache_dir.mkdir(exist_ok=True)
+        self.spacy_model_name = spacy_model
+        self.limiar_otimo = limiar_aceitacao
+        self.cache_file = Path(cache_path)
+        self.cache_file.parent.mkdir(exist_ok=True, parents=True)
 
-        # Cache de embeddings
-        self.cache_embeddings = {}
-        self.cache_file = self.cache_dir / "embeddings_cache.pkl"
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.tokenizer = None
+        self.model = None
+        self.nlp = None
+        self.textos_data = {}
 
+        self.embedding_cache = self._load_cache()
 
     def _load_models(self):
-        """Carrega os modelos necessários."""
-        print("Carregando modelos...")
+        """Carrega os modelos Transformer e spaCy se ainda não foram carregados."""
+        if self.model is None:
+            try:
+                print(f"Carregando modelo {self.model_name}...")
+                self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+                self.model = AutoModel.from_pretrained(self.model_name).to(self.device).eval()
+            except Exception as e:
+                raise RuntimeError(f"Erro ao carregar modelo {e}")
 
-        try:
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            self.model = AutoModel.from_pretrained(self.model_name)
-            self.model.eval()
-            print(f"✓ {self.model_name}")
-        except Exception as e:
-            raise RuntimeError(f"Erro ao carregar modelo: {e}")
+        if self.nlp is None:
+            try:
+                print(f"Carregando modelo spaCy: {self.spacy_model_name}...")
+                self.nlp = spacy.load(self.spacy_model_name, disable=["parser", "ner"])
+            except OSError:
+                print(f"Modelo spaCy '{self.spacy_model_name}' não encontrado. Baixando...")
+                spacy_download(self.spacy_model_name)
+                self.nlp = spacy.load(self.spacy_model_name, disable=["parser", "ner"])
 
-        try:
-            self.nlp = spacy.load(self.spacy_model, disable=["parser", "ner", "lemmatizer"])
-            print(f"✓ {self.spacy_model}")
-        except OSError:
-            raise RuntimeError(f"Modelo '{self.spacy_model}' não encontrado. "
-                             f"Instale com: python -m spacy download {self.spacy_model}")
+    def _load_cache(self) -> dict:
+        """
+        Carrega o cache de embeddings usando torch.load.
 
-    def _load_cache(self):
-        """Carrega cache de embeddings"""
+        Returns:
+            dict: O dicionário de cache carregado ou um dicionário vazio se não for encontrado.
+        """
         if self.cache_file.exists():
             try:
-                with open(self.cache_file, 'rb') as f:
-                    self.cache_embeddings = pickle.load(f)
+                return torch.load(self.cache_file, map_location=self.device)
             except Exception as e:
                 print(f"Aviso: Erro ao carregar cache - {e}")
-                self.cache_embeddings = {}
+        return {}
 
     def _save_cache(self):
-        """Salva cache de embeddings"""
-        try:
-            with open(self.cache_file, 'wb') as f:
-                pickle.dump(self.cache_embeddings, f)
-        except Exception as e:
-            print(f"Aviso: Erro ao salvar cache - {e}")
+        """Salva o cache de embeddings usando torch.save."""
+        if self.embedding_cache:
+            try:
+                torch.save(self.embedding_cache, self.cache_file)
+            except Exception as e:
+                print(f"Aviso: Erro ao salvar cache - {e}")
 
-    def get_embedding(self, palavra: str) -> torch.Tensor:
+    def _get_contextual_embedding(self, contexto: str, palavra: str) -> torch.Tensor:
         """
-        Obtém embedding de uma palavra.
+        Obtém o embedding contextual de uma palavra.
 
         Args:
-            palavra: Palavra para embedding
+            contexto (str): A frase completa com o marcador '[LACUNA]'.
+            palavra (str): A palavra a ser inserida na lacuna.
 
         Returns:
-            Tensor normalizado do embedding
+            torch.Tensor: O vetor de embedding contextual normalizado.
         """
-        if not hasattr(self, 'tokenizer') or not hasattr(self, 'model'):
-            self._load_models()
-            self._load_cache()
+        cache_key = f"{self.model_name}::{contexto}::{palavra.strip()}"
+        if cache_key in self.embedding_cache:
+            return self.embedding_cache[cache_key]
 
-        palavra = palavra.strip().lower()
+        if '[LACUNA]' not in contexto or not palavra.strip():
+            return torch.zeros(self.model.config.hidden_size, device=self.device)
 
-        # Verifica cache
-        if palavra in self.cache_embeddings:
-            return self.cache_embeddings[palavra]
+        frase_preenchida = contexto.replace('[LACUNA]', palavra.strip(), 1)
+        inputs = self.tokenizer(frase_preenchida, return_tensors="pt", truncation=True).to(self.device)
 
-        # Calcula embedding
         try:
-            encoded_input = self.tokenizer([palavra],
-                                           return_tensors='pt',
-                                           padding=True,
-                                           truncation=True)
+            start_char = contexto.find('[LACUNA]')
+            end_char = start_char + len(palavra.strip()) - 1
+            start_token = inputs.char_to_token(start_char)
+            end_token = inputs.char_to_token(end_char)
+            if start_token is None or end_token is None: raise ValueError
 
             with torch.no_grad():
-                model_output = self.model(**encoded_input)
+                outputs = self.model(**inputs)
+            
+            vecs = outputs.last_hidden_state[0, start_token : end_token + 1]
+            embedding = torch.mean(vecs, dim=0)
+        except Exception:
+            with torch.no_grad():
+                outputs = self.model(**inputs)
+            embedding = outputs.last_hidden_state[0, 0, :] # Fallback para o token [CLS]
 
-            embedding = model_output.last_hidden_state[:, 0, :].squeeze(0)
-            embedding = F.normalize(embedding, p=2, dim=0)
+        normalized_embedding = F.normalize(embedding, p=2, dim=0)
+        self.embedding_cache[cache_key] = normalized_embedding.clone().detach()
+        return normalized_embedding
 
-            # Armazena no cache
-            self.cache_embeddings[palavra] = embedding.clone().detach()
-
-            return embedding
-
-        except Exception as e:
-            print(f"Erro ao gerar embedding para '{palavra}': {e}")
-            # Retorna embedding zero em caso de erro
-            return torch.zeros(self.model.config.hidden_size)
-
-    def similaridade(self, palavra1: str, palavra2: str) -> float:
+    def _get_pos_tag_contextual(self, contexto: str, palavra: str) -> Optional[str]:
         """
-        Calcula similaridade semântica entre duas palavras.
+        Obtém a classe gramatical contextual da palavra.
 
         Args:
-            palavra1: Primeira palavra
-            palavra2: Segunda palavra
+            contexto (str): A frase completa com o marcador '[LACUNA]'.
+            palavra (str): A palavra a ser inserida na lacuna e analisada.
 
         Returns:
-            Similaridade cosseno entre as palavras
+            Optional[str]: A string da POS tag (ex: 'VERB') ou None se ocorrer um erro.
         """
-        emb1 = self.get_embedding(palavra1)
-        emb2 = self.get_embedding(palavra2)
-
-        cos_sim = torch.dot(emb1, emb2).item()
-        return cos_sim
-
-    def pos_tag(self, palavra: str) -> Optional[str]:
-        """
-        Obtém classe gramatical de uma palavra usando o spaCy.
-
-        Args:
-            palavra: Palavra de interesse
-
-        Returns:
-            Classe gramatical (POS tag) ou None se erro
-        """
-        if not hasattr(self, 'nlp'):
-            self._load_models()
+        palavra = str(palavra).strip()
+        if '[LACUNA]' not in contexto or not palavra: return None
+        
         try:
-            doc = self.nlp(palavra.strip())
-            if len(doc) > 0:
-                return doc[0].pos_
+            frase_preenchida = contexto.replace('[LACUNA]', palavra, 1)
+            doc = self.nlp(frase_preenchida)
+            start_char = contexto.find('[LACUNA]')
+            for token in doc:
+                if token.idx == start_char:
+                    pos_tag = token.pos_
+                    return pos_tag if pos_tag != 'AUX' else 'VERB'
             return None
-        except Exception as e:
-            print(f"Erro ao processar POS tag para '{palavra}': {e}")
+        except Exception:
             return None
 
-    def avaliar_lacuna(self, gabarito: str, resposta: str) -> Tuple[float, str]:
+    def _calcular_similaridade_contextual(self, contexto: str, p1: str, p2: str) -> float:
+        """
+        Calcula a similaridade de cosseno entre dois embeddings contextuais.
+
+        Args:
+            contexto (str): A frase que provê o contexto.
+            p1 (str): A primeira palavra.
+            p2 (str): A segunda palavra.
+
+        Returns:
+            float: O score de similaridade de cosseno.
+        """
+        emb1 = self._get_contextual_embedding(contexto, p1)
+        emb2 = self._get_contextual_embedding(contexto, p2)
+        return torch.dot(emb1, emb2).item()
+
+    def avaliar_lacuna(self, contexto: str, gabarito: str, resposta: str) -> Tuple[float, str]:
         """
         Avalia uma lacuna individual do teste.
 
         Args:
-            gabarito: Resposta esperada
-            resposta: Resposta do aluno
+            contexto (str): A frase com o marcador '[LACUNA]'.
+            gabarito (str): A resposta esperada do gabarito.
+            resposta (str): A resposta fornecida pelo aluno.
 
         Returns:
-            Tupla com (pontuação, tipo_resposta)
+            Tuple[float, str]: Uma tupla contendo a pontuação (de 0.0 a 1.0) e o tipo da resposta.
         """
-        gabarito = str(gabarito).strip().lower()
-        resposta = str(resposta).strip().lower()
+        self._load_models() 
+        gabarito_norm = str(gabarito).strip().lower()
+        resposta_norm = str(resposta).strip().lower()
 
-        # Resposta exata
-        if resposta == gabarito:
+        if resposta_norm == gabarito_norm:
             return 1.0, 'exata'
-
-        # Resposta em branco
-        if resposta in ["-", "", " ", "none", "nan"]:
+        if resposta_norm in ["-", "", " ", "none", "nan"]:
             return 0.0, 'branco'
 
-        # Erro de grafia
-        max_dist = max(1, len(resposta) // 2)
-        if edit_distance(resposta, gabarito) <= max_dist:
+        max_dist = max(1, len(resposta_norm) // 3)
+        if edit_distance(resposta_norm, gabarito_norm, transpositions=True) <= max_dist:
             return 1.0, 'grafia_incorreta'
+        
+        pos_resposta = self._get_pos_tag_contextual(contexto, resposta_norm)
+        pos_gabarito = self._get_pos_tag_contextual(contexto, gabarito_norm)
+        
+        sim = self._calcular_similaridade_contextual(contexto, resposta_norm, gabarito_norm)
 
-        pos_resposta = self.pos_tag(resposta)
-        pos_gabarito = self.pos_tag(gabarito)
-
-        # Classe gramatical correta
         if pos_resposta and pos_gabarito and pos_resposta == pos_gabarito:
-            sim = self.similaridade(resposta, gabarito)
-
-            # Alta similaridade semântica
-            if sim >= 0.75:
+            if sim >= self.limiar_otimo:
                 return 1.0, 'aceitavel'
             else:
                 return 0.5, 'classe_correta'
+        
+        return 0.0, 'incorreta'
 
-        return 0.0, 'erro'
-
-    def analisar_correcao(self, correcao: List[str]) -> Dict[str, int]:
+    def _get_text_data(self, titulo: str, arquivo_textos: str) -> Tuple[list, list]:
         """
-        Conta a ocorrência de cada tipo de resposta.
+        Carrega e armazena em cache os contextos e gabaritos de um texto do arquivo JSON.
 
         Args:
-            correcao: Lista com os tipos de resposta de cada lacuna.
+            titulo (str): O título do texto a ser procurado no JSON.
+            arquivo_textos (str): O caminho para o arquivo JSON.
 
         Returns:
-            Dicionário com a contagem de cada tipo de resposta.
+            Tuple[list, list]: Uma tupla contendo (lista de contextos, lista de respostas do gabarito).
         """
-        tipos_possiveis = ['exata', 'grafia_incorreta', 'aceitavel', 'classe_correta', 'erro', 'branco']
-        contagens = {tipo: 0 for tipo in tipos_possiveis}
-        contagens.update(Counter(correcao))
-        return contagens
+        if titulo in self.textos_data:
+            return self.textos_data[titulo]
+        
+        try:
+            with open(arquivo_textos, 'r', encoding='utf-8') as f:
+                dados_json = json.load(f)
+            texto_info = next((item for item in dados_json if item.get("titulo") == titulo), None)
+            if not texto_info: raise ValueError
+            
+            texto_completo = texto_info.get('texto', '')
+            respostas = texto_info.get('respostas', [])
 
-    def avaliar_respostas_cloze(self, gabarito: List[str],
-                              respostas: Union[List[str], str]) -> Tuple[float, float, Dict]:
+            frases_finais, indice_resposta = [], 0
+            frases = texto_completo.replace('\n', ' ').split('.')
+            for frase in frases:
+                num_lacunas = frase.count('[LACUNA]')
+                if not num_lacunas: continue
+                partes = frase.split('[LACUNA]')
+                respostas_locais = respostas[indice_resposta : indice_resposta + num_lacunas]
+                for i in range(num_lacunas):
+                    preenchimentos = list(respostas_locais)
+                    preenchimentos[i] = '[LACUNA]'
+                    nova_frase_lista = [val for pair in zip(partes, preenchimentos + ['']) for val in pair]
+                    nova_frase = "".join(nova_frase_lista[:-1]).strip()
+                    if nova_frase: frases_finais.append(nova_frase)
+                indice_resposta += num_lacunas
+
+            self.textos_data[titulo] = (frases_finais, respostas)
+            return frases_finais, respostas
+
+        except Exception as e:
+            raise RuntimeError(f"Erro ao carregar gabarito/contextos para '{titulo}': {e}")
+            
+    def avaliar_respostas_cloze(self, titulo_texto: str, arquivo_textos: str,
+                                respostas_aluno: Union[List[str], str]) -> Tuple[float, Dict]:
         """
-        Avalia todas as lacunas de um teste Cloze.
+        Avalia todas as lacunas de um teste Cloze para um único respondente.
 
         Args:
-            gabarito: Lista de respostas corretas.
-            respostas: Lista de respostas do aluno ou string formatada como lista.
+            titulo_texto (str): O título do texto para buscar contextos e gabaritos.
+            arquivo_textos (str): O caminho para o arquivo JSON com os dados dos textos.
+            respostas_aluno (Union[List[str], str]): Lista de respostas do aluno ou string formatada.
 
         Returns:
-            Tupla com (compreensão, coeficiente de variação, avaliação detalhada).
+            Tuple[float, Dict]: Uma tupla com (taxa de compreensão, dicionário com avaliação detalhada).
         """
-        # Processa respostas se vier como string
-        if isinstance(respostas, str):
-            try:
-                respostas = ast.literal_eval(respostas)
-            except (ValueError, SyntaxError):
-                respostas = [respostas]
+        self._load_models() 
+        
+        contextos, gabarito = self._get_text_data(titulo_texto, arquivo_textos)
+        
+        if isinstance(respostas_aluno, str):
+            try: respostas_aluno = ast.literal_eval(respostas_aluno)
+            except: respostas_aluno = []
 
-        pontuacoes = []
-        correcao_tipos = []
-        n_lacunas = len(gabarito)
-
-        # Avalia cada lacuna
-        for i in range(n_lacunas):
-            resposta_aluno = respostas[i] if i < len(respostas) else ""
-            pontuacao, tipo = self.avaliar_lacuna(gabarito[i], resposta_aluno)
+        pontuacoes, correcao_tipos = [], []
+        for i, gabarito_item in enumerate(gabarito):
+            resposta = respostas_aluno[i] if i < len(respostas_aluno) else ""
+            contexto = contextos[i] if i < len(contextos) else ""
+            
+            pontuacao, tipo = self.avaliar_lacuna(contexto, gabarito_item, resposta)
             pontuacoes.append(pontuacao)
             correcao_tipos.append(tipo)
 
-        # Calcula métricas
         media = np.mean(pontuacoes) if pontuacoes else 0
-        cv = np.std(pontuacoes) / media if media > 0 else 0
-
         compreensao = round(media * 100, 3)
-        coef_variacao = round(cv, 3)
+        
+        tipos_possiveis = ['exata', 'grafia_incorreta', 'aceitavel', 'classe_correta', 'incorreta', 'branco']
+        contagens = {tipo: 0 for tipo in tipos_possiveis}
+        contagens.update(Counter(correcao_tipos))
 
-        # Monta o dicionário de avaliação
-        contagens = self.analisar_correcao(correcao_tipos)
-        avaliacao = {
-            'pontuacao': pontuacoes,
-            'correcao': correcao_tipos,
-            **contagens
-        }
+        return compreensao, {'pontuacao': pontuacoes, 'correcao': correcao_tipos, **contagens}
 
-        return compreensao, coef_variacao, avaliacao
-
-    def analisar_quadrantes(self, tipos_resposta: List[str],
-                            modo_analise: str = 'moda') -> List[Tuple[Optional[str], int]]:
+    def processar_dataframe(self, df: pd.DataFrame, arquivo_textos: str) -> pd.DataFrame:
         """
-        Analisa respostas em quadrantes para identificar categorias dominantes.
+        Processa um DataFrame de respostas de múltiplos alunos, aplicando a avaliação contextual.
 
         Args:
-            tipos_resposta: Lista de tipos de resposta ('exata', 'grafia_incorreta', etc.)
-            modo_analise: 'moda' para o tipo mais frequente ou 'sequencia' para a maior sequência.
+            df (pd.DataFrame): DataFrame com dados originais dos alunos (requer coluna 'respostas').
+            arquivo_textos (str): Caminho para o arquivo JSON com os dados dos textos.
 
         Returns:
-            Lista com (categoria_dominante, contagem) para cada quarto.
+            pd.DataFrame: O DataFrame original expandido com todas as colunas de avaliação.
         """
-        quadrantes = np.array_split(tipos_resposta, 4)
-        resultados = []
+        
+        titulo_texto = df["texto"].iloc[0]
 
-        for quadrante in quadrantes:
-            if len(quadrante) == 0:
-                resultados.append((None, 0))
-                continue
-
-            if modo_analise == 'moda':
-                if not quadrante.any(): # Verifica se o quadrante não está vazio
-                    resultados.append((None, 0))
-                else:
-                    contagem_quadrante = Counter(quadrante)
-                    categoria_max, max_ocorrencias = contagem_quadrante.most_common(1)[0]
-                    resultados.append((categoria_max, max_ocorrencias))
-
-            elif modo_analise == 'sequencia':
-                sequencias = [(tipo, len(list(grupo))) for tipo, grupo in groupby(quadrante)]
-                categoria_max, max_rep = max(sequencias, key=lambda x: x[1])
-                resultados.append((categoria_max, max_rep))
-            else:
-                raise ValueError("modo_analise deve ser 'moda' ou 'sequencia'")
-
-        return resultados
-
-    def intervalo_tempo(self, tempo_inicial: str, tempo_final: str) -> float:
-        """
-        Calcula duração do teste em minutos.
-
-        Args:
-            tempo_inicial: Horário de início
-            tempo_final: Horário de término
-
-        Returns:
-            Duração em minutos
-        """
-        try:
-            tempo_inicial = pd.to_datetime(tempo_inicial)
-            tempo_final = pd.to_datetime(tempo_final)
-            duracao = tempo_final - tempo_inicial
-            return duracao.total_seconds() / 60
-        except Exception as e:
-            print(f"Erro ao calcular duração: {e}")
-            return 0.0
-
-    def processar_dataframe(self, df: pd.DataFrame, gabarito: List[str]) -> pd.DataFrame:
-        """
-        Processa dataframe completo com avaliações.
-
-        Args:
-            df: DataFrame com dados originais
-            gabarito: Lista de respostas corretas
-
-        Returns:
-            DataFrame expandido com avaliações
-        """
-        df_resultado = df.copy()
-
-        # Calcula duração
-        if 'tempo_inicial' in df.columns and 'tempo_final' in df.columns:
-            df_resultado['duracao'] = df_resultado.apply(
-                lambda row: self.intervalo_tempo(row['tempo_inicial'], row['tempo_final']),
-                axis=1
+        resultados_processados = []
+        for _, row in df.iterrows():
+            compreensao, avaliacao_detalhada = self.avaliar_respostas_cloze(
+                titulo_texto,
+                arquivo_textos,
+                row['respostas']
             )
+            avaliacao_detalhada['compreensao'] = compreensao
+            resultados_processados.append(avaliacao_detalhada)
+        
+        df_avaliacoes = pd.DataFrame(resultados_processados)
+        df_resultado = pd.concat([df.reset_index(drop=True), df_avaliacoes], axis=1)
 
-        # Inicializa colunas de resultado
-        resultados = {
-            'correcao': [], 'quadrante_1': [], 'quadrante_2': [], 'quadrante_3': [], 'quadrante_4': [],
-            'compreensao': [], 'coeficiente_variacao': [], 'taxa_exatas': [], 'exata': [],
-            'grafia_incorreta': [], 'aceitavel': [], 'classe_correta': [], 'erro': [], 'branco': []
-        }
-
-        # Processa cada linha
-        for _, row in df_resultado.iterrows():
-            compreensao, coef_var, avaliacao = self.avaliar_respostas_cloze(gabarito, row['respostas'])
-
-            # Adiciona resultados básicos
-            resultados['correcao'].append(avaliacao['correcao'])
-            resultados['compreensao'].append(compreensao)
-            resultados['coeficiente_variacao'].append(coef_var)
-            resultados['taxa_exatas'].append(
-                round(avaliacao['exata'] / len(gabarito) * 100, 3) if gabarito else 0
-            )
-
-            # Adiciona contagens por tipo
-            for tipo in ['exata', 'grafia_incorreta', 'aceitavel', 'classe_correta', 'erro', 'branco']:
-                resultados[tipo].append(avaliacao[tipo])
-
-            # Análise de quadrantes (usando o novo modo padrão 'moda')
-            analise_quadrantes = self.analisar_quadrantes(avaliacao['correcao'], modo_analise='moda')
-            for i, (categoria, contagem) in enumerate(analise_quadrantes, 1):
-                quadrante_key = f'quadrante_{i}'
-                resultados[quadrante_key].append((str(categoria), contagem))
-
-        # Adiciona colunas ao DataFrame
-        for coluna, valores in resultados.items():
-            df_resultado[coluna] = valores
-
-        return df_resultado
-
-    def get_gabarito(self, titulo: str, arquivo_textos: str) -> List[str]:
-        """
-        Carrega gabarito de teste específico.
-
-        Args:
-            titulo: Título do texto
-            arquivo_textos: Caminho para arquivo JSON com os dados dos textos
-
-        Returns:
-            Lista de respostas corretas
-        """
-        try:
-            with open(arquivo_textos, 'r', encoding='utf-8') as file:
-                dados_textos = json.load(file)
-
-            df_textos = pd.DataFrame(dados_textos)
-            gabarito = df_textos[df_textos['titulo'] == titulo]['respostas'].values
-
-            if len(gabarito) > 0:
-                return gabarito[0]
-            else:
-                raise ValueError(f"Texto '{titulo}' não encontrado no arquivo")
-
-        except Exception as e:
-            raise RuntimeError(f"Erro ao carregar gabarito: {e}")
-
-    def plot_dist_respostas(self, df: pd.DataFrame, tipo: str = 'compreensao',
-                            salvar: bool = True, output_dir: str = "./plots"):
-        """
-        Plota distribuição de desempenho dos alunos.
-
-        Args:
-            df: DataFrame com dados de desempenho
-            tipo: Tipo de métrica ('compreensao' ou 'taxa_exatas')
-            salvar: Se deve salvar o gráfico
-            output_dir: Diretório para salvar gráficos
-        """
-        plt.figure(figsize=(7, 5))
-        sns.histplot(df[tipo], bins=20, kde=True)
-        plt.xlim(0, 100)
-
-        # Labels e título
-        if tipo == 'compreensao':
-            titulo = f"Distribuição da Compreensão de Leitura"
-            xlabel = 'Taxa de Compreensão (%)'
-        else:
-            titulo = f"Distribuição da Taxa de Acerto"
-            xlabel = 'Taxa de Acerto (%)'
-
-        # Adiciona informações da turma
-        if 'ano' in df.columns and 'turma' in df.columns:
-            titulo += f" - {df['ano'].iloc[0]}º {df['turma'].iloc[0]}"
-
-        plt.title(titulo)
-        plt.xlabel(xlabel)
-        plt.ylabel('Frequência')
-
-        if salvar:
-            os.makedirs(output_dir, exist_ok=True)
-            sufixo = f"{df['ano'].iloc[0]}-{df['turma'].iloc[0]}" if 'ano' in df.columns else "resultado"
-            plt.savefig(f"{output_dir}/[{tipo}]_distribuicao_{sufixo}.png", dpi=300, bbox_inches='tight')
-
-        plt.show()
-
-    def plot_eficiencia_leitura(self, df: pd.DataFrame, tipo: str = 'compreensao',
-                                salvar: bool = True, output_dir: str = "./plots"):
-        """
-        Plota eficiência de leitura (desempenho vs tempo).
-        Baseado em Cardoso et al. (2024) - https://osf.io/47m93/.
-
-        Args:
-            df: DataFrame com dados de desempenho
-            tipo: Tipo de métrica ('compreensao' ou 'taxa_exatas')
-            salvar: Se deve salvar o gráfico
-            output_dir: Diretório para salvar gráficos
-        """
-        plt.figure(figsize=(6, 6))
-
-        # Scatter plot
-        sns.scatterplot(x=tipo, y='duracao', data=df, color='black', s=30)
-
-        # Linhas de referência
-        media_desempenho = np.mean(df[tipo])
-        media_duracao = np.mean(df['duracao'])
-
-        plt.axvline(x=media_desempenho, color='blue', linestyle='--', linewidth=2)
-        plt.axvline(x=44, color='red', linewidth=2)
-        plt.axvline(x=58, color='green', linewidth=2)
-        plt.axhline(y=media_duracao, color='blue', linestyle='--', linewidth=2)
-
-        # Labels e título
-        titulo_base = "Eficiência de Leitura: "
-        if tipo == 'compreensao':
-            titulo_base += "Compreensão vs Tempo"
-            xlabel = "Compreensão (%)"
-        else:
-            titulo_base += "Taxa de Acerto vs Tempo"
-            xlabel = "Taxa de Acerto (%)"
-
-        # Adiciona informações da turma se disponível
-        if 'ano' in df.columns and 'turma' in df.columns:
-            titulo_base += f"\n{df['ano'].iloc[0]}º {df['turma'].iloc[0]}"
-
-        plt.title(titulo_base, fontsize=14)
-        plt.xlabel(xlabel, fontsize=12)
-        plt.ylabel("Tempo (min)", fontsize=12)
-        plt.xlim(0, 100)
-        plt.ylim(0, 60)
-
-        plt.tight_layout()
-
-        if salvar:
-            os.makedirs(output_dir, exist_ok=True)
-            sufixo = f"{df['ano'].iloc[0]}-{df['turma'].iloc[0]}" if 'ano' in df.columns else "resultado"
-            plt.savefig(f"{output_dir}/[{tipo}]_eficiencia_leitura_{sufixo}.png",
-                        dpi=300, bbox_inches='tight')
-
-        plt.show()
+        return df_resultado 
 
     def __del__(self):
-        """Salva cache ao destruir objeto."""
-        if hasattr(self, 'cache_embeddings') and self.cache_embeddings:
-            self._save_cache()
+        """Salva o cache ao destruir o objeto ou ao final da sessão."""
+        self._save_cache()
