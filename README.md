@@ -37,6 +37,28 @@ Python: 3.11.2
 ```
 
 ### Instruções de execução
+
+#### 1. Clonar o repo e criar o env
+
+```bash
+git clone https://github.com/tuliosg/nlp-cloze.git
+cd nlp-cloze
+python -m venv venv
+```
+
+#### 2. Ativar o ambiente virtual
+ 
+```bash
+# Windows (PowerShell)
+venv\Scripts\Activate.ps1
+ 
+# Linux
+source venv/bin/activate
+```
+
+#### 3. Executar os notebooks
+Siga a ordem abaixo:
+
 1. `/src/Organização dos dados.ipynb`
 2. `/src/Análise dos modelos de linguagem.ipynb`
 3. `/src/Avaliação de eficiência na leitura - uma abordagem baseada em PLN.ipynb`
