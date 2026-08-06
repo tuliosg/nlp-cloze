@@ -24,6 +24,25 @@ Materiais suplementares relacionados ao artigo e às análises.
 ### 📄 `requirements.txt`
 Dependências para executar os códigos da pasta `src`.
 
+## Ambiente e execução
+### Infraestrutura
+Os códigos desenvolvidos foram executados no Google Colaboratory (cota gratuita em ambiente T4) e também em uma máquina com as especificações a seguir:
+
+```
+OS: Windows 11 Home
+CPU: Intel(R) Core(TM) i5-10210U CPU @ 1.60GHz (2.11 GHz)
+RAM: 20 GB
+GPU: Intel(R) UHD Graphics (128 MB)
+Python: 3.11.2
+```
+
+### Instruções de execução
+1. `/src/Organização dos dados.ipynb`
+2. `/src/Análise dos modelos de linguagem.ipynb`
+3. `/src/Avaliação de eficiência na leitura - uma abordagem baseada em PLN.ipynb`
+
+> [!IMPORTANT]
+> Para a execução do último notebook (3), é necessário inserir o `nlpcloze.py` no mesmo diretório para importá-lo.
 
 ## Como citar?
 Para citar este trabalho, utilize a referência abaixo ou [acesse o artigo completo](https://doi.org/10.5753/stil.2025.37822).
