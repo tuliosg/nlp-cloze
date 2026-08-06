@@ -1,8 +1,13 @@
-
+<a href="lamid.ufs.br"><img  src="https://github.com/lamid-ufs/ASPBr/blob/6508a5eb2548ba68c98749f7ceb916bb05da0317/src/streamlit/imgs/lamid-logo-full.png?raw=true" alt="LAMID" height="34" /></a>
+<p>
   <a align="left" href="https://doi.org/10.5753/stil.2025.37822">
-    <img src="https://img.shields.io/badge/DOI-10.5753/stil.2025.37822-blue" alt="DOI">
+    <img src="https://img.shields.io/badge/Artigo-10.5753/stil.2025.37822-blue" alt="DOI">
   </a>
-  <a href="lamid.ufs.br"><img  align="right" src="https://github.com/user-attachments/assets/915d65fb-281c-42db-b81b-05c785c2473e" alt="LAMID" height="34" /></a> <br/>
+  </a>
+  <a href="https://doi.org/10.5281/zenodo.21828506">
+    <img align="right" src="https://img.shields.io/badge/Code-10.5281/zenodo.21828506-blue" alt="DOI">
+  </a>
+</p>
 
 
 # Avaliação de eficiência na leitura: uma abordagem baseada em PLN
